@@ -1,63 +1,52 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 
-void plus_char(char** str, char data, long* capacity, long* length) {
-    if (*length + 2 > *capacity) {
-        *capacity *= 2;
-        char* new_str = (char*)realloc(*str, (*capacity) * sizeof(char));
-        if (new_str == NULL) {
-            exit(1);
-        }
-        *str = new_str;
-    }
-    (*str)[*length] = data;
-    (*length)++;
-    (*str)[*length] = '\0';
-}
+typedef struct shared {
+    char response[4];
+    char data[];
+};
 
 int main(int argc, char *argv[]) {
 
-    if (argc < 3) {
+    if (argc < 4) {
         return 1;
     }
 
     const char *filename = argv[1];
-    int pipe2 = atoi(argv[2]);
+    const char *name = argv[2];
+    size_t shm_size = (size_t) strtoul(argv[3], NULL, 10);
+
+    int fd = shm_open(name, O_RDWR, 0600);
+    if (fd < 0) {
+        return 1;
+    }
+    struct shared *shm = mmap(NULL, shm_size, PROT_READ | PROT_WRITE,MAP_SHARED, fd, 0);
+    close(fd);
+    if (shm == MAP_FAILED) {
+        return 1;
+    }
+
     FILE *file = fopen(filename, "w");
-    long capacity = 16;
-    long length = 0;
+    if (!file) {
+        memcpy(shm->response, "ERR", 3);
+        munmap(shm, shm_size);
+        return 1;
+    }
+
+    char *str = shm->data;
     char *ptr;
     char *endptr;
     float first_num;
 
-    if (!file) {
-        return 1;
-    }
-
-    char* str = (char*)malloc(capacity * sizeof(char));
-    if (!str) {
-        write(pipe2, "ERR", 3);
+    if (str[0] == '\0' || str[0] == '\n') {
+        memcpy(shm->response, "ERR", 3);
         fclose(file);
-        return 1;
-    }
-
-    char c = fgetc(stdin);
-    if (c == EOF) {
-        free(str);
-        fclose(file);
-        return 0;
-    }
-
-    while (c != '\n' && c != EOF) {
-        plus_char(&str, c, &capacity, &length);
-        c = fgetc(stdin);
-    }
-
-    if (length == 0) {
-        free(str);
-        write(pipe2, "ERR", 3);
-        fclose(file);
+        munmap(shm, shm_size);
         return 1;
     }
 
@@ -65,9 +54,9 @@ int main(int argc, char *argv[]) {
     first_num = strtof(ptr, &endptr);
 
     if (ptr == endptr) {
-        write(pipe2, "OK\n", 3);
-        free(str);
+        memcpy(shm->response, "OK\n", 3);
         fclose(file);
+        munmap(shm, shm_size);
         return 0;
     }
 
@@ -92,16 +81,16 @@ int main(int argc, char *argv[]) {
     }
 
     if (div_by_zero) {
-        write(pipe2, "ERR", 3);
-        free(str);
+        memcpy(shm->response, "ERR", 3);
         fclose(file);
+        munmap(shm, shm_size);
         exit(1);
     }
 
     fprintf(file, "%f\n", first_num);
     fclose(file);
-    write(pipe2, "OK\n", 3);
-    free(str);
+    memcpy(shm->response, "OK\n", 3);
+    munmap(shm, shm_size);
 
     return 0;
 }
