@@ -3,11 +3,10 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/mman.h>
-#include <sys/stat.h>
 #include <sys/wait.h>
 #include <string.h>
 
-#define NAME "/lab4"
+char* NAME = "lab4";
 
 struct shared {
     char response[4];
@@ -56,6 +55,7 @@ int main() {
 
     printf("Введите числа:\n");
     line = (char *) malloc(capacity_line * sizeof(char));
+
     if (!line) {
         free(filename);
         return 1;
@@ -68,50 +68,48 @@ int main() {
     }
     plus_char(&line, '\n', &capacity_line, &len_line);
 
+    size_t size = sizeof(struct shared) + len_line + 1;
 
-    size_t shm_size = sizeof(struct shared) + len_line + 1;
-    shm_unlink(SHM_NAME);
-    int fd = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0600);
+    int fd = open(NAME, O_CREAT | O_RDWR | O_TRUNC, 0600);
     if (fd < 0) {
-        perror("shm_open");
-        free(line); free(filename);
+        free(line);
+        free(filename);
         return 1;
     }
-    if (ftruncate(fd, shm_size) < 0) {
-        perror("ftruncate");
-        close(fd); shm_unlink(SHM_NAME);
-        free(line); free(filename);
+    if (ftruncate(fd, size) < 0) {
+        close(fd);
+        unlink(NAME);
+        free(line);
+        free(filename);
         return 1;
     }
 
-    struct shared *shm = mmap(NULL, shm_size, PROT_READ | PROT_WRITE,
-                              MAP_SHARED, fd, 0);
+    struct shared *m = mmap(NULL, size, PROT_READ | PROT_WRITE,MAP_SHARED, fd, 0);
     close(fd);
-    if (shm == MAP_FAILED) {
-        perror("mmap");
-        shm_unlink(SHM_NAME);
-        free(line); free(filename);
+    if (m == MAP_FAILED) {
+        unlink(NAME);
+        free(line);
+        free(filename);
         return 1;
     }
 
-    memset(shm->response, 0, sizeof(shm->response));
-    memcpy(shm->data, line, len_line + 1);
+    memcpy(m->data, line, len_line + 1);
 
     char size_str[32];
-    snprintf(size_str, sizeof(size_str), "%zu", shm_size);
+    snprintf(size_str, sizeof(size_str), "%zu", size);
 
     pid_t pid = fork();
 
     if (pid < 0) {
-        perror("fork");
-        munmap(shm, shm_size); shm_unlink(SHM_NAME);
-        free(line); free(filename);
+        munmap(m, size);
+        unlink(NAME);
+        free(line);
+        free(filename);
         return 1;
     }
 
     if (pid == 0) {
-        execl("./child", "child", filename, SHM_NAME, size_str, NULL);
-        perror("execl");
+        execl("./child", "child", filename, NAME, size_str, NULL);
         exit(1);
     }
 
@@ -119,17 +117,14 @@ int main() {
     waitpid(pid, &status, 0);
 
     int error = 0;
-    if (strncmp(shm->response, "ERR", 3) != 0 &&
-        strncmp(shm->response, "OK\n", 3) != 0) {
-        error = 1;                       /* ребёнок ничего не ответил */
-    } else if (strncmp(shm->response, "ERR", 3) == 0) {
+    if (strncmp(m->response, "OK\n", 3) != 0) {
         error = 1;
     }
 
-    munmap(shm, shm_size);
-    shm_unlink(SHM_NAME);
+    munmap(m, size);
+    unlink(NAME);
     free(line);
     free(filename);
 
-    return error ? 1 : 0;
+    return 0;
 }
